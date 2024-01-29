@@ -2,9 +2,9 @@
 
 # [Project 1: To identify differentially expressed genes in microarray from GEO42568](.github/workflows/static.yml)
 
-This is a project I completed for my masters program where I identified differentially expressed genes in breast cancer cells.
+This is a project I completed for my masters program where I identified differentially expressed genes in breast cancer cells using R language.
 
-*Downloaded and untarred the supplementary files for GSE42568
+*Downloaded and untarred the supplementary files for [GSE42568]([url](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE42568)) 
 
 *List and gunzip all .CEL files in the GSE42568 directory.
 
@@ -21,3 +21,4 @@ This is a project I completed for my masters program where I identified differen
 *Obtain significant genes using topTable and extract DEGs
 
 *Plot a volcano plot using ggplot2 to visualize DEGs.
+
