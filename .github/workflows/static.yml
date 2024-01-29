@@ -1,43 +1,155 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+library(GEOquery)
+library(affy)
+library(affyPLM)
+library(dplyr)
 
-on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
+#dataset1
+getGEOSuppFiles("GSE42568")
+untar("GSE42568_RAW.tar")
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+#unzip the .CELfile
+setwd("C:/Users/User/OneDrive/Portfolio/Portfolio")
+cel_file <- list.files("GSE42568",pattern = ".CEL")
+setwd("C:/Users/User/OneDrive/Portfolio/Portfolio/GSE42568")
+sapply(cel_file, gunzip)
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+#background correction
+exp_set <- justRMA() 
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+#to print the expression data
+exp_data <- exprs(exp_set)
 
-jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          # Upload entire repository
-          path: '.'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+
+#to generate phenotypic data
+pheno_dir <- "C:/Users/User/OneDrive/Portfolio/Portfolio/GSE42568"
+pheno_set <- getGEO("GSE42568",GSEMatrix = TRUE, AnnotGPL = TRUE,
+                    destdir = pheno_dir )
+
+
+#data normalization
+pheno_data <- pheno_set[[1]] %>% 
+  pData()
+
+library(stringr)
+exp_data_n <- exp_data %>% 
+  colnames()  %>%
+  str_split("[_]", n=2) %>%
+  unlist() %>%
+  matrix(ncol = 2, byrow = T) %>%
+  as.data.frame()
+
+colnames(exp_data_n)<-c("name","useless")
+colnames(exp_data)<-exp_data_n$name
+
+rownames(pheno_data) %in% colnames(exp_data)
+rownames(pheno_data) == colnames(exp_data)
+
+write.table(as.data.frame(exp_data), "visual_exp_data.txt")
+
+getwd()
+GSE42568_series <- read.table("visual_exp_data.txt", header = TRUE, row.names = 1)
+
+#to convert the matrix into dataframe
+exp_data = as.data.frame(exp_data)
+
+#to rename column names
+colnames(pheno_data)[colnames(pheno_data)=="tissue:ch1"]="Group"
+
+#to rename "normal breast" with "control"
+pheno_data[pheno_data == "normal breast"] <- "control"
+#to rename "breast cancer" with "cancer"
+pheno_data[pheno_data == "breast cancer"] <- "cancer"
+
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("hgu133plus2.db")                 
+library(DESeq2)                
+library(tidyverse)
+
+#to keep rows with atleast 10 reads in total
+exp_data[rowSums(exp_data) >= 10, ] -> filtered.count
+
+#
+library(limma)
+all(colnames(exp_data) %in% rownames(pheno_data))
+
+# to create a design matrix
+design <- model.matrix(~ 0 +Group, pheno_data)
+colnames(design) <- levels(factor(pheno_data$Group))
+
+# fit a linear model to the data
+fit <- lmFit(data.matrix(exp_data), design)  
+
+# Create the contrast matrix for control and cancer group
+cont.matrix <- makeContrasts(contrasts="cancer - control", levels=design)
+
+# compute statistics and significant genes
+fit2 <- contrasts.fit(fit, cont.matrix) 
+
+# Apply empirical Bayes moderation to the standard errors
+fit2 <- eBayes(fit2)
+
+# Calculate the differential expression statistics
+limma.result <- topTable(fit2, adjust="fdr", sort.by="B", number=nrow(exp_data))
+
+#to extract the DEGs
+limmaDEG = limma.result[limma.result$adj.P.Val <0.01 & abs(limma.result$logFC)>2,]
+dim(limmaDEG)
+
+#to add the gene symbol column limmaDEG
+library(hgu133plus2.db)
+limmaDEG$gene_symbol= mapIds(hgu133plus2.db,keys=rownames(limmaDEG),column=c("SYMBOL"),keytype="PROBEID")
+limmaDEG = limmaDEG %>% 
+  filter(!is.na(gene_symbol))
+
+#to remove duplicates in limmaDEG
+limmaDEG = subset(limmaDEG, !duplicated(subset(limmaDEG, select=gene_symbol)))
+rownames(limmaDEG) = limmaDEG$gene_symbol
+dim(limmaDEG)
+
+
+#table for upregulated DEG
+upregulated_DEG <- limmaDEG [limmaDEG$logFC > 2,]
+nrow(upregulated_DEG)
+#table for downregulated DEG
+downregulated_DEG <- limmaDEG [limmaDEG$logFC < -2,]
+nrow(downregulated_DEG)
+library(hgu133plus2.db)
+
+
+
+
+#volcano plot
+#to add gene names to column to limma result (annotation)
+limma.result$gene_symbol= mapIds(hgu133plus2.db,keys=rownames(limma.result),column=c("SYMBOL"),keytype="PROBEID")
+limma.result = limma.result %>% 
+  filter(!is.na(gene_symbol))
+#to remove duplicates in limma.result
+limma.result = subset(limma.result, !duplicated(subset(limma.result, select=gene_symbol)))
+rownames(limma.result) = limma.result$gene_symbol
+
+library(ggplot2)
+library(ggrepel)
+
+#volcano plot with limma.result
+limma.result$new <- "not" #creating a "new" column
+limma.result$new[limma.result$logFC > 2 & limma.result$P.Value < 0.01] <- "upreg"
+
+limma.result$new[limma.result$logFC < -2 & limma.result$P.Value < 0.01] <- "downreg"
+
+p1 = ggplot(data = limma.result, aes(x = logFC, y= -log10(P.Value))) + geom_point()+ theme_minimal()
+
+p2a <- p1 + geom_vline(xintercept=c(-2, 2), col="red") +
+  geom_hline(yintercept=-log10(0.01), col="red")
+
+# 2. to automate a bit: ceate a named vector: the values are the colors to be used, the names are the categories they will be assigned to:
+mycolors <- c("blue","red", "black")
+names(mycolors) <- c("upreg", "downreg", "not")
+p3a <- p2a + scale_colour_manual(values = mycolors)
+pch = 20
+ggplot(data = limma.result, aes(x = logFC, y= -log10(P.Value), col=new, label=gene_symbol)) + geom_point()+ theme_minimal() + geom_text_repel() +
+  scale_color_manual(values=c("blue", "black", "red")) +
+  geom_vline(xintercept=c(-2, 2), col="red") +
+  geom_hline(yintercept=-log10(0.01), col="red")
